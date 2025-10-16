@@ -1,22 +1,14 @@
-// App.js (na raiz do projeto)
 import React from 'react';
-import { StyleSheet, ScrollView } from 'react-native';
-import MeuCard from './src/componentes/MeuCard';
+import { NavigationContainer } from '@react-navigation/native';
+import { AuthProvider } from './src/context/AuthContext';
+import AppNavigator from './src/navigation/AppNavigator';
 
 export default function App() {
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <MeuCard/>
-      <MeuCard/>
-      <MeuCard/>
-    </ScrollView>
+    <AuthProvider>
+      <NavigationContainer>
+        <AppNavigator />
+      </NavigationContainer>
+    </AuthProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    paddingTop: 20,
-    paddingBottom: 40,
-    paddingHorizontal: 10,
-  },
-});
