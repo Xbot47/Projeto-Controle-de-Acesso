@@ -1,0 +1,1685 @@
+Main:
+
+package org.example;
+
+import javax.swing.*;
+import java.awt.Window; 
+
+public class Main {
+    
+    public static void main(String[] args) {
+        setSystemLookAndFeel();
+        
+        SwingUtilities.invokeLater(() -> {
+            try {
+                startApplication();
+            } catch (Exception e) {
+                handleFatalError("Erro fatal ao iniciar aplicação", e);
+            }
+        });
+    }
+    
+    private static void startApplication() {
+        if (isDatabaseConfigured()) {
+            launchMainApplication();
+        } else {
+            showInitialChoiceDialog(); 
+        }
+    }
+    
+    // MÉTODO ESTÁTICO PRINCIPAL - Chamado por todas as telas para voltar ao menu
+    public static void showInitialChoiceDialog() {
+        SwingUtilities.invokeLater(() -> { 
+            Object[] options = {"🔧 Configurar Conexão", "🗃️ Gerenciar Banco de Dados", "❌ Sair"};
+            
+            int choice = JOptionPane.showOptionDialog(null,
+                "Bem-vindo ao Gerenciador de Pessoas!\n\n" +
+                "Escolha uma opção:\n" +
+                "• 🔧 Configurar Conexão: Configurar servidor SQL Server\n" +
+                "• 🗃️ Gerenciar Banco de Dados: Criar novo banco ou restaurar backup",
+                "Escolha Inicial",
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.QUESTION_MESSAGE,
+                null,
+                options,
+                options[0]);
+            
+            handleInitialChoice(choice);
+        });
+    }
+    
+    private static void handleInitialChoice(int choice) {
+        switch (choice) {
+            case 0: // Configurar Conexão
+                showSetupDialog();
+                break;
+            case 1: // Gerenciar Banco
+                showInstallerGUI();
+                break;
+            case 2: // Sair
+            case -1: // Usuário fechou a janela (X)
+                System.exit(0);
+                break;
+            default:
+                System.exit(0);
+        }
+    }
+    
+    private static boolean isDatabaseConfigured() {
+        String serverName = ConfigManager.getServerName();
+        if (serverName == null || serverName.trim().isEmpty()) {
+            return false;
+        }
+        
+        boolean serverConnected = ConnectionFactory.testConnection(serverName);
+        if (!serverConnected) {
+            return false;
+        }
+        
+        boolean databaseExists = DatabaseManager.getInstance().databaseExists(serverName);
+        return databaseExists;
+    }
+    
+    private static void showSetupDialog() {
+        SetupDialog dialog = new SetupDialog();
+        if (dialog.showDialog()) { // A execução para aqui até o SetupDialog fechar
+            startApplication(); 
+        } else {
+            showInitialChoiceDialog(); 
+        }
+    }
+    
+    private static void showInstallerGUI() {
+        InstallerGUI installer = new InstallerGUI();
+        installer.setVisible(true);
+        
+        // CORREÇÃO: O Main é o único responsável por ouvir o fechamento do InstallerGUI.
+        // A InstallerGUI não deve ter seu próprio WindowListener para evitar duplicação.
+        installer.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override
+            public void windowClosed(java.awt.event.WindowEvent e) {
+                // Ao fechar, retorna para o startApplication para verificar o status
+                startApplication(); 
+            }
+        });
+    }
+    
+    public static void launchMainApplication() {
+        try {
+            // CORREÇÃO CRÍTICA: Lógica de Limpeza de Janelas
+            // Força o descarte de QUALQUER JOptionPane/JDialog persistente.
+            Window[] windows = Window.getWindows();
+            for (Window window : windows) {
+                if (window instanceof JDialog) {
+                    window.dispose();
+                }
+            }
+
+            AppGUI app = new AppGUI();
+            app.setVisible(true);
+            app.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE); 
+            
+        } catch (Exception e) {
+            handleFatalError("Erro ao iniciar interface principal", e);
+        }
+    }
+    
+    // ... (setSystemLookAndFeel e handleFatalError inalterados) ...
+    
+    private static void setSystemLookAndFeel() {
+        try {
+            for (UIManager.LookAndFeelInfo info : UIManager.getInstalledLookAndFeels()) {
+                if ("Nimbus".equals(info.getName())) {
+                    UIManager.setLookAndFeel(info.getClassName());
+                    return;
+                }
+            }
+            UIManager.setLookAndFeel(UIManager.getCrossPlatformLookAndFeelClassName());
+        } catch (Exception e) {
+            System.err.println("Aviso: Não foi possível configurar a aparência do sistema: " + e.getMessage());
+        }
+    }
+    
+    private static void handleFatalError(String message, Exception e) {
+        System.err.println(message + ": " + e.getMessage());
+        e.printStackTrace();
+        
+        JOptionPane.showMessageDialog(null,
+            message + ":\n" + e.getMessage() + "\n\nO aplicativo será fechado.",
+            "Erro Fatal", JOptionPane.ERROR_MESSAGE);
+            
+        System.exit(1);
+    }
+}
+
+AppGUI:
+
+package org.example;
+
+import javax.swing.*;
+import java.awt.*;
+import java.util.List;
+
+public class AppGUI extends JFrame {
+    private final PessoaDAO pessoaDAO;
+    private JTextField nomeField, idadeField, buscaField;
+    private JTextArea resultadoArea;
+    
+    public AppGUI() {
+        this.pessoaDAO = new PessoaDAO();
+        initializeUI();
+    }
+    
+    private void initializeUI() {
+        setTitle("Gerenciador de Pessoas - " + ConfigManager.getServerName());
+        // JFrame.EXIT_ON_CLOSE é o correto para a janela principal
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE); 
+        setSize(600, 500);
+        setLocationRelativeTo(null);
+        
+        createMenuBar();
+        createMainPanel();
+    }
+    
+    private void createMenuBar() {
+        JMenuBar menuBar = new JMenuBar();
+        
+        JMenu configMenu = new JMenu("Configuração");
+        JMenuItem configItem = new JMenuItem("Reconfigurar Banco de Dados");
+        configItem.addActionListener(e -> reconfigureDatabase());
+        configMenu.add(configItem);
+        
+        menuBar.add(configMenu);
+        setJMenuBar(menuBar);
+    }
+    
+    private void createMainPanel() {
+        JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
+        mainPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        
+        mainPanel.add(createInputPanel(), BorderLayout.NORTH);
+        mainPanel.add(createSearchPanel(), BorderLayout.CENTER);
+        
+        add(mainPanel);
+    }
+    
+    private JPanel createInputPanel() {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        
+        panel.add(new JLabel("Nome:"));
+        nomeField = new JTextField(15);
+        panel.add(nomeField);
+        
+        panel.add(new JLabel("Idade:"));
+        idadeField = new JTextField(5);
+        panel.add(idadeField);
+        
+        JButton salvarButton = new JButton("Salvar");
+        salvarButton.addActionListener(e -> salvarPessoa());
+        panel.add(salvarButton);
+        
+        return panel;
+    }
+    
+    private JPanel createSearchPanel() {
+        JPanel panel = new JPanel(new BorderLayout());
+        
+        JPanel searchPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        searchPanel.add(new JLabel("Buscar:"));
+        buscaField = new JTextField(20);
+        searchPanel.add(buscaField);
+        
+        JButton buscarButton = new JButton("Buscar");
+        buscarButton.addActionListener(e -> buscarPessoa());
+        searchPanel.add(buscarButton);
+        
+        resultadoArea = new JTextArea(15, 50);
+        resultadoArea.setEditable(false);
+        
+        panel.add(searchPanel, BorderLayout.NORTH);
+        panel.add(new JScrollPane(resultadoArea), BorderLayout.CENTER);
+        
+        return panel;
+    }
+    
+    private void salvarPessoa() {
+        try {
+            String nome = nomeField.getText().trim();
+            String idadeText = idadeField.getText().trim();
+            
+            if (nome.isEmpty()) {
+                showError("O nome não pode ser vazio.");
+                return;
+            }
+            
+            if (idadeText.isEmpty()) {
+                showError("A idade não pode ser vazia.");
+                return;
+            }
+            
+            int idade = Integer.parseInt(idadeText);
+            
+            pessoaDAO.salvar(nome, idade);
+            
+            nomeField.setText("");
+            idadeField.setText("");
+            
+            JOptionPane.showMessageDialog(this, "Pessoa salva com sucesso!", 
+                "Sucesso", JOptionPane.INFORMATION_MESSAGE);
+            
+        } catch (NumberFormatException e) {
+            showError("A idade deve ser um número válido.");
+        } catch (Exception e) {
+            showError("Erro ao salvar pessoa: " + e.getMessage());
+        }
+    }
+    
+    private void buscarPessoa() {
+        try {
+            String termo = buscaField.getText().trim();
+            List<String> resultados = pessoaDAO.buscar(termo);
+            
+            resultadoArea.setText("");
+            if (resultados.isEmpty()) {
+                resultadoArea.setText("Nenhum resultado encontrado.");
+            } else {
+                resultados.forEach(resultado -> resultadoArea.append(resultado + "\n"));
+            }
+        } catch (Exception e) {
+            showError("Erro ao buscar: " + e.getMessage());
+        }
+    }
+    
+    private void reconfigureDatabase() {
+        int option = JOptionPane.showConfirmDialog(this,
+            "Deseja reconfigurar o banco de dados? O aplicativo será reiniciado.",
+            "Reconfigurar", JOptionPane.YES_NO_OPTION);
+            
+        if (option == JOptionPane.YES_OPTION) {
+            ConfigManager.setProperty("db.server", "");
+            dispose(); // Fecha a janela AppGUI atual
+            
+            // Abre o SetupDialog
+            SwingUtilities.invokeLater(() -> {
+                SetupDialog setupDialog = new SetupDialog();
+                setupDialog.setVisible(true);
+                
+                // O AppGUI precisa de um listener para saber quando o SetupDialog fechar
+                setupDialog.addWindowListener(new java.awt.event.WindowAdapter() {
+                    @Override
+                    public void windowClosed(java.awt.event.WindowEvent e) {
+                        checkAndOpenMainApp();
+                    }
+                });
+            });
+        }
+    }
+    
+    // MÉTODO UNIFICADO E CORRIGIDO
+    private void checkAndOpenMainApp() {
+        // Verifica se o banco está configurado após a reconfiguração
+        if (isDatabaseConfigured()) {
+            SwingUtilities.invokeLater(() -> {
+                // Chama o Main para garantir o fluxo de limpeza de janelas antes de reabrir.
+                Main.launchMainApplication(); 
+            });
+        } else {
+            // Se não estiver configurado, volta para a escolha inicial
+            SwingUtilities.invokeLater(() -> {
+                Main.showInitialChoiceDialog();
+            });
+        }
+    }
+    
+    // REMOVIDO: O método checkAndOpenMainApp() duplicado
+    
+    private boolean isDatabaseConfigured() {
+        String serverName = ConfigManager.getServerName();
+        if (serverName == null || serverName.trim().isEmpty()) {
+            return false;
+        }
+        
+        boolean serverConnected = ConnectionFactory.testConnection(serverName);
+        if (!serverConnected) {
+            return false;
+        }
+        
+        boolean databaseExists = DatabaseManager.getInstance().databaseExists(serverName);
+        return databaseExists;
+    }
+    
+    private void showError(String message) {
+        JOptionPane.showMessageDialog(this, message, "Erro", JOptionPane.ERROR_MESSAGE);
+    }
+}
+
+ConexaoBD:
+
+package org.example;
+
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+
+public class ConexaoBD {
+
+    private static final String DB_NAME = "DadosPessoais"; 
+
+    public static Connection conectar() {
+        Connection conexao = null;
+        
+        String serverName = ConfigManager.getProperty("db.server"); 
+        
+        // Se a configuração estiver vazia, usaremos um valor que forçará o loop no Main
+        if (serverName == null || serverName.isEmpty()) {
+             serverName = "LOCALHOST_PLACEHOLDER\\SQLEXPRESS"; 
+        } else {
+             // CORREÇÃO CRÍTICA: Substitui a barra simples por barra dupla para o JDBC
+             serverName = serverName.replace("\\", "\\\\"); 
+        }
+        
+        // URL FINAL CORRIGIDA
+        String url = "jdbc:sqlserver://" + serverName + ";databaseName=" + DB_NAME + ";integratedSecurity=true;trustServerCertificate=true;loginTimeout=10;";
+        
+        try {
+            // Tenta a conexão com o servidor configurado
+            conexao = DriverManager.getConnection(url);
+            
+        } catch (SQLException e) {
+            // O erro é tratado na classe Main
+        }
+        
+        return conexao;
+    }
+}
+
+ConfigManager:
+
+package org.example;
+
+import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Properties;
+
+public class ConfigManager {
+    private static final String CONFIG_DIR = System.getProperty("user.home") + "/.PessoasManager";
+    private static final String CONFIG_FILE = CONFIG_DIR + "/config.properties";
+    private static final Properties props = new Properties();
+    
+    static {
+        loadConfiguration();
+    }
+    
+    private static void loadConfiguration() {
+        try {
+            Path configPath = Paths.get(CONFIG_FILE);
+            if (Files.exists(configPath)) {
+                props.load(Files.newInputStream(configPath));
+            }
+        } catch (IOException e) {
+            System.err.println("Erro ao carregar configuração: " + e.getMessage());
+        }
+    }
+    
+    public static String getProperty(String key) {
+        return props.getProperty(key);
+    }
+    
+    public static String getProperty(String key, String defaultValue) {
+        return props.getProperty(key, defaultValue);
+    }
+    
+    public static void setProperty(String key, String value) {
+        props.setProperty(key, value);
+        saveConfiguration();
+    }
+    
+    private static void saveConfiguration() {
+        try {
+            Files.createDirectories(Paths.get(CONFIG_DIR));
+            props.store(Files.newOutputStream(Paths.get(CONFIG_FILE)), 
+                       "Configurações do Gerenciador de Pessoas");
+        } catch (IOException e) {
+            System.err.println("Erro ao salvar configuração: " + e.getMessage());
+        }
+    }
+    
+    public static String getServerName() {
+        return getProperty("db.server");
+    }
+    
+    public static void setServerName(String serverName) {
+        setProperty("db.server", serverName);
+    }
+}
+
+ConnectionFactory:
+
+package org.example;
+
+import java.sql.*;
+import java.util.logging.Logger;
+
+public class ConnectionFactory {
+    private static final String DB_NAME = "DadosPessoais";
+    private static final Logger logger = Logger.getLogger(ConnectionFactory.class.getName());
+    
+    static {
+        try {
+            Class.forName("com.microsoft.sqlserver.jdbc.SQLServerDriver");
+            System.out.println("✅ Driver SQL Server carregado com sucesso");
+        } catch (ClassNotFoundException e) {
+            System.err.println("❌ ERRO: Driver SQL Server JDBC não encontrado!");
+            e.printStackTrace();
+        }
+    }
+    
+    public static Connection getConnection() throws SQLException {
+        String serverName = ConfigManager.getProperty("db.server");
+        
+        if (serverName == null || serverName.trim().isEmpty()) {
+            throw new SQLException("Servidor de banco de dados não configurado");
+        }
+        
+        String url = buildConnectionString(serverName, DB_NAME);
+        logger.info("Tentando conexão com: " + url);
+        
+        return DriverManager.getConnection(url);
+    }
+    
+    public static Connection getConnection(String serverName) throws SQLException {
+        String url = buildConnectionString(serverName, DB_NAME);
+        logger.info("Tentando conexão com: " + url);
+        return DriverManager.getConnection(url);
+    }
+    
+    private static String buildConnectionString(String serverName, String databaseName) {
+        String cleanServerName = serverName.replace("\\\\", "\\");
+        
+        if (databaseName.isEmpty()) {
+            return String.format(
+                "jdbc:sqlserver://%s;integratedSecurity=true;trustServerCertificate=true;loginTimeout=30;encrypt=false",
+                cleanServerName
+            );
+        } else {
+            return String.format(
+                "jdbc:sqlserver://%s;databaseName=%s;integratedSecurity=true;trustServerCertificate=true;loginTimeout=30;encrypt=false",
+                cleanServerName, databaseName
+            );
+        }
+    }
+    
+    public static boolean testConnection(String serverName) {
+        try {
+            System.out.println("🔌 Testando conexão com: " + serverName);
+            
+            // Testa APENAS a conexão com o servidor (SEM banco de dados)
+            String testUrl = buildConnectionString(serverName, "");
+            
+            try (Connection conn = DriverManager.getConnection(testUrl)) {
+                boolean serverConnected = conn.isValid(5);
+                System.out.println("✅ Conexão com servidor OK: " + serverConnected);
+                
+                // Retorna true se o servidor estiver conectável
+                // NÃO tenta conectar ao banco específico para não criá-lo automaticamente
+                return serverConnected;
+            }
+            
+        } catch (SQLException e) {
+            System.err.println("❌ Falha na conexão: " + e.getMessage());
+            return false;
+        }
+    }
+
+    public static boolean testServerConnection(String serverName) {
+        return testConnection(serverName);
+    }
+    
+    // MÉTODO SEPARADO para criar banco (só é chamado quando o usuário escolher)
+    public static boolean createDatabaseIfNotExists(String serverName) {
+        try {
+            String masterUrl = buildConnectionString(serverName, "");
+            
+            try (Connection conn = DriverManager.getConnection(masterUrl);
+                 Statement stmt = conn.createStatement()) {
+                
+                // Cria o banco se não existir
+                stmt.execute("IF NOT EXISTS(SELECT * FROM sys.databases WHERE name = 'DadosPessoais') " +
+                            "CREATE DATABASE DadosPessoais");
+                System.out.println("✅ Banco de dados criado/verificado");
+                
+                // Conecta ao banco e cria a tabela
+                String dbUrl = buildConnectionString(serverName, DB_NAME);
+                try (Connection dbConn = DriverManager.getConnection(dbUrl);
+                     Statement dbStmt = dbConn.createStatement()) {
+                    
+                    dbStmt.execute("IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Pessoa' AND xtype='U') " +
+                                  "CREATE TABLE Pessoa (" +
+                                  "Id INT IDENTITY(1,1) PRIMARY KEY, " +
+                                  "Nome NVARCHAR(100) NOT NULL, " +
+                                  "Idade INT NOT NULL, " +
+                                  "DataCriacao DATETIME2 DEFAULT GETDATE())");
+                    System.out.println("✅ Tabela Pessoa criada/verificada");
+                }
+                
+                return true;
+            }
+            
+        } catch (SQLException e) {
+            System.err.println("❌ Erro ao criar banco: " + e.getMessage());
+            return false;
+        }
+    }
+}
+
+DatabaseInitializer:
+
+package org.example;
+
+import java.io.File;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import javax.swing.filechooser.FileNameExtensionFilter;
+import javax.swing.JFileChooser;
+import javax.swing.JOptionPane;
+
+public class DatabaseInitializer {
+
+    private static final String DB_NAME = "DadosPessoais";
+
+    public void setupDatabase() {
+        String serverName = ConfigManager.getProperty("db.server");
+
+        if (serverName == null || serverName.isEmpty()) {
+            JOptionPane.showMessageDialog(null,
+                "Erro: Nome do servidor não configurado.",
+                "Erro", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        String urlMaster = "jdbc:sqlserver://" + serverName + ";integratedSecurity=true;trustServerCertificate=true;";
+
+        try (Connection conn = DriverManager.getConnection(urlMaster)) {
+            try (Statement stmt = conn.createStatement()) {
+                String createDbSql = "IF NOT EXISTS(SELECT * FROM sys.databases WHERE name = '" + DB_NAME + "') " +
+                                     "BEGIN " +
+                                     "CREATE DATABASE " + DB_NAME + "; " +
+                                     "END;";
+                stmt.execute(createDbSql);
+            }
+
+            JOptionPane.showMessageDialog(null,
+                "Banco de dados '" + DB_NAME + "' criado/verificado com sucesso!",
+                "Sucesso", JOptionPane.INFORMATION_MESSAGE);
+
+        } catch (SQLException e) {
+            JOptionPane.showMessageDialog(null,
+                "Erro ao criar banco de dados: " + e.getMessage(),
+                "Erro", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        String dbUrl = "jdbc:sqlserver://" + serverName + ";databaseName=" + DB_NAME + ";integratedSecurity=true;trustServerCertificate=true;";
+
+        try (Connection conn = DriverManager.getConnection(dbUrl)) {
+            try (Statement stmt = conn.createStatement()) {
+                String createTableSql = "IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Pessoa' AND xtype='U') " +
+                                        "CREATE TABLE Pessoa (" +
+                                        "Id INT PRIMARY KEY IDENTITY(1,1)," +
+                                        "Nome VARCHAR(100) NOT NULL," +
+                                        "Idade INT NOT NULL);";
+                stmt.execute(createTableSql);
+            }
+
+            JOptionPane.showMessageDialog(null,
+                "Tabela 'Pessoa' criada/verificada com sucesso!",
+                "Sucesso", JOptionPane.INFORMATION_MESSAGE);
+
+        } catch (SQLException e) {
+            JOptionPane.showMessageDialog(null,
+                "Erro ao criar tabela: " + e.getMessage(),
+                "Erro", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    public boolean restoreDatabase(String backupFilePath) {
+        String serverName = ConfigManager.getProperty("db.server");
+
+        if (serverName == null || serverName.isEmpty()) {
+            JOptionPane.showMessageDialog(null,
+                "Erro: Nome do servidor não configurado.",
+                "Erro", JOptionPane.ERROR_MESSAGE);
+            return false;
+        }
+
+        File backupFile = new File(backupFilePath);
+        if (!backupFile.exists()) {
+            JOptionPane.showMessageDialog(null,
+                "Arquivo de backup não encontrado:\n" + backupFilePath,
+                "Erro", JOptionPane.ERROR_MESSAGE);
+            return false;
+        }
+
+        String mdfPath = "C:\\Program Files\\Microsoft SQL Server\\MSSQL14.SQLEXPRESS03\\MSSQL\\DATA\\DadosPessoais.mdf";
+        String ldfPath = "C:\\Program Files\\Microsoft SQL Server\\MSSQL14.SQLEXPRESS03\\MSSQL\\DATA\\DadosPessoais_log.ldf";
+
+        String masterUrl = "jdbc:sqlserver://" + serverName + ";integratedSecurity=true;trustServerCertificate=true;";
+
+        try (Connection conn = DriverManager.getConnection(masterUrl);
+             Statement stmt = conn.createStatement()) {
+
+            String logicalDataName = null;
+            String logicalLogName = null;
+
+            String fileListSql = "RESTORE FILELISTONLY FROM DISK = N'" + escapeSqlLiteral(backupFilePath) + "'";
+
+            try (ResultSet rs = stmt.executeQuery(fileListSql)) {
+                while (rs.next()) {
+                    String logicalName = rs.getString("LogicalName");
+                    String type = rs.getString("Type");
+                    if (type != null && type.equalsIgnoreCase("L")) {
+                        logicalLogName = logicalName;
+                    } else {
+                        if (logicalDataName == null) {
+                            logicalDataName = logicalName;
+                        }
+                    }
+                }
+            } catch (SQLException ex) {
+                logicalDataName = null;
+                logicalLogName = null;
+            }
+
+            if (logicalDataName == null) {
+                logicalDataName = DB_NAME;
+            }
+            if (logicalLogName == null) {
+                logicalLogName = DB_NAME + "_log";
+            }
+
+            String dropSql = "IF EXISTS(SELECT * FROM sys.databases WHERE name = '" + DB_NAME + "') " +
+                             "BEGIN " +
+                             "ALTER DATABASE " + DB_NAME + " SET SINGLE_USER WITH ROLLBACK IMMEDIATE; " +
+                             "DROP DATABASE " + DB_NAME + "; " +
+                             "END";
+            stmt.execute(dropSql);
+
+            String restoreSql = "RESTORE DATABASE " + DB_NAME +
+                                " FROM DISK = N'" + escapeSqlLiteral(backupFilePath) + "'" +
+                                " WITH MOVE N'" + escapeSqlLiteral(logicalDataName) + "' TO N'" + escapeSqlLiteral(mdfPath) + "'," +
+                                " MOVE N'" + escapeSqlLiteral(logicalLogName) + "' TO N'" + escapeSqlLiteral(ldfPath) + "'," +
+                                " REPLACE";
+
+            stmt.execute(restoreSql);
+
+            JOptionPane.showMessageDialog(null,
+                "Banco de dados restaurado com sucesso a partir de:\n" + backupFilePath,
+                "Sucesso", JOptionPane.INFORMATION_MESSAGE);
+
+            return true;
+
+        } catch (SQLException e) {
+            JOptionPane.showMessageDialog(null,
+                "Erro ao restaurar backup: " + e.getMessage(),
+                "Erro", JOptionPane.ERROR_MESSAGE);
+            return false;
+        }
+    }
+
+    public boolean restoreDatabaseWithDialog() {
+        File defaultDir = new File("C:\\Program Files\\Microsoft SQL Server\\MSSQL14.SQLEXPRESS03\\MSSQL\\Backup");
+        JFileChooser fileChooser = new JFileChooser(defaultDir);
+
+        FileNameExtensionFilter filter = new FileNameExtensionFilter("Backup SQL Server (*.bak)", "bak");
+        fileChooser.setFileFilter(filter);
+
+        fileChooser.setDialogTitle("Selecione o arquivo de backup (.bak)");
+        int userSelection = fileChooser.showOpenDialog(null);
+
+        if (userSelection != JFileChooser.APPROVE_OPTION) {
+            JOptionPane.showMessageDialog(null,
+                "Nenhum arquivo selecionado. Restauração cancelada.",
+                "Aviso", JOptionPane.WARNING_MESSAGE);
+            return false;
+        }
+
+        File backupFile = fileChooser.getSelectedFile();
+
+        if (!backupFile.getName().toLowerCase().endsWith(".bak")) {
+            JOptionPane.showMessageDialog(null,
+                "O arquivo selecionado não é um backup válido (.bak).",
+                "Erro", JOptionPane.ERROR_MESSAGE);
+            return false;
+        }
+
+        return restoreDatabase(backupFile.getAbsolutePath());
+    }
+
+    private String escapeSqlLiteral(String s) {
+        if (s == null) return null;
+        return s.replace("'", "''");
+    }
+}
+
+DatabaseManager:
+
+package org.example;
+
+import java.sql.*;
+import java.util.*;
+import java.util.regex.Pattern;
+
+public class DatabaseManager {
+    private static final String DB_NAME = "DadosPessoais";
+    private static DatabaseManager instance;
+    
+    private DatabaseManager() {}
+    
+    public static synchronized DatabaseManager getInstance() {
+        if (instance == null) {
+            instance = new DatabaseManager();
+        }
+        return instance;
+    }
+    
+    public boolean testServerConnection(String serverName) {
+        String url = buildConnectionUrl(serverName, "");
+        try (Connection conn = DriverManager.getConnection(url)) {
+            return conn.isValid(3);
+        } catch (SQLException e) {
+            System.out.println("Falha na conexão com " + serverName + ": " + e.getMessage());
+            return false;
+        }
+    }
+    
+    public List<String> detectAllPossibleInstances() {
+        List<String> instances = new ArrayList<>();
+        String computerName = System.getenv("COMPUTERNAME");
+        
+        if (computerName == null || computerName.isEmpty()) {
+            computerName = "localhost";
+        }
+        
+        String[] patterns = {
+            computerName,
+            computerName + "\\SQLEXPRESS",
+            computerName + "\\SQLEXPRESS01", 
+            computerName + "\\SQLEXPRESS02",
+            computerName + "\\SQLEXPRESS03",
+            computerName + "\\MSSQLSERVER",
+            "localhost",
+            "localhost\\SQLEXPRESS", 
+            "localhost\\SQLEXPRESS01",
+            "localhost\\SQLEXPRESS02",
+            "localhost\\SQLEXPRESS03",
+            "localhost\\MSSQLSERVER",
+            ".",
+            ".\\SQLEXPRESS",
+            ".\\SQLEXPRESS01", 
+            ".\\SQLEXPRESS02",
+            ".\\SQLEXPRESS03",
+            ".\\MSSQLSERVER",
+            "127.0.0.1",
+            "127.0.0.1\\SQLEXPRESS",
+            "127.0.0.1\\SQLEXPRESS01",
+            "127.0.0.1\\SQLEXPRESS02", 
+            "127.0.0.1\\SQLEXPRESS03",
+            "127.0.0.1\\MSSQLSERVER",
+            "SQLEXPRESS03",
+            "SQLEXPRESS01",
+            "SQLEXPRESS02",
+            "MSSQLSERVER"
+        };
+        
+        for (String instance : patterns) {
+            if (testServerConnection(instance)) {
+                instances.add(instance);
+                System.out.println("✅ Instância conectável: " + instance);
+            }
+        }
+        
+        return instances;
+    }
+    
+    public List<String> findAllSqlInstances() {
+        List<String> instances = new ArrayList<>();
+        String computerName = System.getenv("COMPUTERNAME");
+        
+        if (computerName == null || computerName.isEmpty()) {
+            computerName = "localhost";
+        }
+        
+        instances.addAll(findInstancesInRegistry());
+        instances.addAll(findInstancesInServices());
+        instances.addAll(testCommonInstances(computerName));
+        
+        Set<String> uniqueInstances = new LinkedHashSet<>(instances);
+        return new ArrayList<>(uniqueInstances);
+    }
+    
+    private List<String> findInstancesInRegistry() {
+        List<String> instances = new ArrayList<>();
+        try {
+            Process process = Runtime.getRuntime().exec("reg query \"HKLM\\SOFTWARE\\Microsoft\\Microsoft SQL Server\" /s /f \"InstanceName\"");
+            Scanner scanner = new Scanner(process.getInputStream());
+            
+            while (scanner.hasNextLine()) {
+                String line = scanner.nextLine();
+                if (line.contains("InstanceName") && line.contains("REG_SZ")) {
+                    String instanceName = line.split("REG_SZ")[1].trim();
+                    if (!instanceName.isEmpty() && !instances.contains(instanceName)) {
+                        instances.add(instanceName);
+                    }
+                }
+            }
+            scanner.close();
+        } catch (Exception e) {
+            System.out.println("⚠ Não foi possível acessar o registro: " + e.getMessage());
+        }
+        return instances;
+    }
+    
+    private List<String> findInstancesInServices() {
+        List<String> instances = new ArrayList<>();
+        try {
+            Process process = Runtime.getRuntime().exec("sc query type= service state= all");
+            Scanner scanner = new Scanner(process.getInputStream());
+            
+            Pattern sqlPattern = Pattern.compile("SQL Server \\(([A-Z0-9_]+)\\)");
+            
+            while (scanner.hasNextLine()) {
+                String line = scanner.nextLine();
+                java.util.regex.Matcher matcher = sqlPattern.matcher(line);
+                if (matcher.find()) {
+                    String instanceName = matcher.group(1);
+                    if (!instances.contains(instanceName)) {
+                        instances.add(instanceName);
+                    }
+                }
+            }
+            scanner.close();
+        } catch (Exception e) {
+            System.out.println("⚠ Não foi possível listar serviços: " + e.getMessage());
+        }
+        return instances;
+    }
+    
+    private List<String> testCommonInstances(String computerName) {
+        List<String> instances = new ArrayList<>();
+        
+        String[] instancePatterns = {
+            computerName, computerName + "\\SQLEXPRESS", computerName + "\\SQLEXPRESS01", 
+            computerName + "\\SQLEXPRESS02", computerName + "\\SQLEXPRESS03", computerName + "\\SQLEXPRESS04",
+            computerName + "\\MSSQLSERVER", computerName + "\\MSSQLSERVER01", "localhost",
+            "localhost\\SQLEXPRESS", "localhost\\SQLEXPRESS01", "localhost\\SQLEXPRESS02", 
+            "localhost\\SQLEXPRESS03", "localhost\\MSSQLSERVER", ".", ".\\SQLEXPRESS",
+            ".\\SQLEXPRESS01", ".\\SQLEXPRESS02", ".\\SQLEXPRESS03", ".\\MSSQLSERVER",
+            "127.0.0.1", "127.0.0.1\\SQLEXPRESS", "127.0.0.1\\SQLEXPRESS01",
+            "127.0.0.1\\SQLEXPRESS02", "127.0.0.1\\SQLEXPRESS03"
+        };
+        
+        for (String instance : instancePatterns) {
+            if (testServerConnection(instance)) {
+                instances.add(instance);
+            }
+        }
+        
+        return instances;
+    }
+    
+    public Optional<List<String>> detectSqlServers() {
+        List<String> connectableInstances = detectAllPossibleInstances();
+        
+        if (connectableInstances.isEmpty()) {
+            System.out.println("❌ Nenhuma instância SQL Server conectável encontrada");
+            return Optional.empty();
+        }
+        
+        System.out.println("✅ Instâncias conectáveis: " + connectableInstances);
+        return Optional.of(connectableInstances);
+    }
+    
+    public boolean createDatabase(String serverName) {
+        System.out.println("🗃️ Criando banco de dados em: " + serverName);
+        
+        String masterUrl = buildConnectionUrl(serverName, "");
+        
+        try (Connection conn = DriverManager.getConnection(masterUrl);
+             Statement stmt = conn.createStatement()) {
+            
+            stmt.execute("IF NOT EXISTS(SELECT * FROM sys.databases WHERE name = '" + DB_NAME + "') " +
+                        "CREATE DATABASE " + DB_NAME);
+            System.out.println("✅ Banco de dados criado/verificado");
+            
+            String dbUrl = buildConnectionUrl(serverName, DB_NAME);
+            try (Connection dbConn = DriverManager.getConnection(dbUrl);
+                 Statement dbStmt = dbConn.createStatement()) {
+                
+                dbStmt.execute("IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Pessoa' AND xtype='U') " +
+                              "CREATE TABLE Pessoa (" +
+                              "Id INT IDENTITY(1,1) PRIMARY KEY, " +
+                              "Nome NVARCHAR(100) NOT NULL, " +
+                              "Idade INT NOT NULL, " +
+                              "DataCriacao DATETIME2 DEFAULT GETDATE())");
+                System.out.println("✅ Tabela Pessoa criada/verificada");
+            }
+            
+            return true;
+            
+        } catch (SQLException e) {
+            System.err.println("❌ Erro ao criar banco de dados: " + e.getMessage());
+            return false;
+        }
+    }
+    
+    public boolean databaseExists(String serverName) {
+    // Apenas verifica se existe, NÃO cria
+        String url = buildConnectionUrl(serverName, DB_NAME);
+            try (Connection conn = DriverManager.getConnection(url)) {
+            return true; // Se conectou, o banco existe
+        } catch (SQLException e) {
+            return false; // Se falhou, o banco não existe
+        }
+    }
+    
+    private String buildConnectionUrl(String serverName, String databaseName) {
+        StringBuilder url = new StringBuilder("jdbc:sqlserver://")
+            .append(serverName.replace("\\", "\\\\"));
+        
+        if (!databaseName.isEmpty()) {
+            url.append(";databaseName=").append(databaseName);
+        }
+        
+        url.append(";integratedSecurity=true")
+           .append(";trustServerCertificate=true")
+           .append(";loginTimeout=5")
+           .append(";encrypt=false");
+        
+        return url.toString();
+    }
+    
+    public boolean isAnySqlServiceRunning() {
+        try {
+            Process process = Runtime.getRuntime().exec("sc query type= service state= all");
+            Scanner scanner = new Scanner(process.getInputStream());
+            while (scanner.hasNextLine()) {
+                String line = scanner.nextLine();
+                if (line.contains("SQL Server") && line.contains("RUNNING")) {
+                    scanner.close();
+                    return true;
+                }
+            }
+            scanner.close();
+        } catch (Exception e) {
+            System.err.println("Erro ao verificar serviços: " + e.getMessage());
+        }
+        return false;
+    }
+}
+
+InstallerGUI:
+
+package org.example;
+
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.WindowAdapter;
+import java.awt.event.WindowEvent;
+import java.io.File;
+
+public class InstallerGUI extends JFrame {
+    private JTextArea logArea;
+    
+    public InstallerGUI() {
+        initializeUI();
+        // REMOVIDO: setupWindowListener();
+        // O Main agora controla o retorno do fluxo
+    }
+    
+    private void initializeUI() {
+        setTitle("Gerenciador de Banco de Dados - Criar/Restaurar");
+        setSize(500, 400);
+        setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE); // Importante para o Main capturar windowClosed
+        setLocationRelativeTo(null);
+        
+        JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
+        mainPanel.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
+        
+        // Painel de informações
+        JPanel infoPanel = new JPanel(new BorderLayout());
+        String serverInfo = ConfigManager.getServerName();
+        if (serverInfo == null || serverInfo.isEmpty()) {
+            serverInfo = "Não configurado";
+        }
+        JLabel infoLabel = new JLabel("Servidor SQL: " + serverInfo);
+        infoPanel.add(infoLabel, BorderLayout.NORTH);
+        
+        // Área de log
+        logArea = new JTextArea(10, 40);
+        logArea.setEditable(false);
+        logArea.setBackground(new Color(240, 240, 240));
+        logArea.setFont(new Font("Consolas", Font.PLAIN, 11));
+        JScrollPane logScroll = new JScrollPane(logArea);
+        infoPanel.add(logScroll, BorderLayout.CENTER);
+        
+        // Painel de botões
+        JPanel buttonPanel = new JPanel(new GridLayout(2, 1, 10, 10));
+        
+        JButton criarDbButton = new JButton("🗃️ 1. Criar Novo Banco de Dados");
+        criarDbButton.addActionListener(this::criarBancoDados);
+        
+        JButton restaurarButton = new JButton("💾 2. Restaurar de Backup");
+        restaurarButton.addActionListener(this::restaurarBackup);
+        
+        JButton voltarButton = new JButton("↩️ Voltar para Escolha Inicial");
+        // CORREÇÃO: O botão 'Voltar' apenas fecha o InstallerGUI.
+        // O WindowListener no Main fará o resto do trabalho.
+        voltarButton.addActionListener(e -> dispose()); 
+        
+        buttonPanel.add(criarDbButton);
+        buttonPanel.add(restaurarButton);
+        
+        JPanel bottomPanel = new JPanel(new FlowLayout());
+        bottomPanel.add(voltarButton);
+        
+        mainPanel.add(infoPanel, BorderLayout.CENTER);
+        mainPanel.add(buttonPanel, BorderLayout.SOUTH);
+        mainPanel.add(bottomPanel, BorderLayout.NORTH);
+        
+        add(mainPanel);
+        
+        logMessage("=== GERENCIADOR DE BANCO DE DADOS ===");
+        logMessage("Servidor: " + serverInfo);
+        logMessage("Selecione uma opção acima.");
+    }
+    
+    // REMOVIDO: setupWindowListener()
+    
+    // REMOVIDO: voltarParaEscolhaInicial()
+    
+    // ... (Restante dos métodos criarBancoDados, restaurarBackup, logMessage inalterados) ...
+    
+    private void criarBancoDados(ActionEvent e) {
+        String serverName = ConfigManager.getServerName();
+        
+        if (serverName == null || serverName.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Servidor SQL não configurado!\n\nConfigure primeiro a conexão com o SQL Server.", "Erro", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        
+        int confirm = JOptionPane.showConfirmDialog(this, "Deseja criar o banco de dados 'DadosPessoais'?\n\nServidor: " + serverName + "\nEsta ação criará o banco e a tabela necessários.", "Confirmar Criação", JOptionPane.YES_NO_OPTION);
+        
+        if (confirm == JOptionPane.YES_OPTION) {
+            new Thread(() -> {
+                try {
+                    logMessage("\n=== CRIANDO BANCO DE DADOS ===");
+                    logMessage("Servidor: " + serverName);
+                    
+                    boolean success = DatabaseManager.getInstance().createDatabase(serverName);
+                    
+                    SwingUtilities.invokeLater(() -> {
+                        if (success) {
+                            logMessage("✅ Banco de dados criado com sucesso!");
+                            JOptionPane.showMessageDialog(this, "Banco de dados criado com sucesso!\n\nAgora você pode usar o aplicativo normalmente.", "Sucesso", JOptionPane.INFORMATION_MESSAGE);
+                            
+                            int abrirApp = JOptionPane.showConfirmDialog(this, "Deseja abrir o aplicativo principal agora?", "Abrir Aplicativo", JOptionPane.YES_NO_OPTION);
+                            
+                            if (abrirApp == JOptionPane.YES_OPTION) {
+                                dispose();
+                                new AppGUI().setVisible(true);
+                            }
+                        } else {
+                            logMessage("❌ Falha ao criar banco de dados");
+                            JOptionPane.showMessageDialog(this, "Falha ao criar banco de dados.\nVerifique as permissões do SQL Server.", "Erro", JOptionPane.ERROR_MESSAGE);
+                        }
+                    });
+                    
+                } catch (Exception ex) {
+                    SwingUtilities.invokeLater(() -> {
+                        logMessage("❌ Erro: " + ex.getMessage());
+                        JOptionPane.showMessageDialog(this, "Erro ao criar banco: " + ex.getMessage(), "Erro", JOptionPane.ERROR_MESSAGE);
+                    });
+                }
+            }).start();
+        }
+    }
+    
+    private void restaurarBackup(ActionEvent e) {
+        String serverName = ConfigManager.getServerName();
+        
+        if (serverName == null || serverName.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "Servidor SQL não configurado!\n\nConfigure primeiro a conexão com o SQL Server.", "Erro", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+        
+        // Tenta construir o caminho de backup baseado no SQL Server 2017/Instância
+        String backupFolderPath = "C:\\Program Files\\Microsoft SQL Server\\MSSQL14.SQLEXPRESS03\\MSSQL\\Backup";
+        File initialDirectory = new File(backupFolderPath);
+        
+        // Se a pasta SQL Server não existir, abre na pasta Documentos
+        if (!initialDirectory.exists()) {
+            initialDirectory = new File(System.getProperty("user.home") + "/Documents");
+        }
+        
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("Selecionar Arquivo de Backup");
+        fileChooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Backup SQL Server", "bak"));
+        
+        // Define o diretório inicial
+        fileChooser.setCurrentDirectory(initialDirectory);
+        
+        int result = fileChooser.showOpenDialog(this);
+        if (result == JFileChooser.APPROVE_OPTION) {
+            File backupFile = fileChooser.getSelectedFile();
+            
+            int confirm = JOptionPane.showConfirmDialog(this, "Deseja restaurar o backup?\n\nArquivo: " + backupFile.getName() + "\nServidor: " + serverName + "\n\n⚠️ ATENÇÃO: Esta ação substituirá o banco atual!", "Confirmar Restauração", JOptionPane.YES_NO_OPTION);
+            
+            if (confirm == JOptionPane.YES_OPTION) {
+                new Thread(() -> {
+                    try {
+                        logMessage("\n=== RESTAURANDO BACKUP ===");
+                        logMessage("Arquivo: " + backupFile.getAbsolutePath());
+                        logMessage("Servidor: " + serverName);
+                        
+                        DatabaseInitializer initializer = new DatabaseInitializer();
+                        boolean success = initializer.restoreDatabase(backupFile.getAbsolutePath());
+                        
+                        SwingUtilities.invokeLater(() -> {
+                            if (success) {
+                                logMessage("✅ Backup restaurado com sucesso!");
+                                JOptionPane.showMessageDialog(this, "Backup restaurado com sucesso!\n\nAgora você pode usar o aplicativo normalmente.", "Sucesso", JOptionPane.INFORMATION_MESSAGE);
+                                
+                                int abrirApp = JOptionPane.showConfirmDialog(this, "Deseja abrir o aplicativo principal agora?", "Abrir Aplicativo", JOptionPane.YES_NO_OPTION);
+                                
+                                if (abrirApp == JOptionPane.YES_OPTION) {
+                                    dispose();
+                                    new AppGUI().setVisible(true);
+                                }
+                            } else {
+                                logMessage("❌ Falha ao restaurar backup");
+                                JOptionPane.showMessageDialog(this, "Falha ao restaurar backup.\nVerifique o arquivo e as permissões.", "Erro", JOptionPane.ERROR_MESSAGE);
+                            }
+                        });
+                        
+                    } catch (Exception ex) {
+                        SwingUtilities.invokeLater(() -> {
+                            logMessage("❌ Erro: " + ex.getMessage());
+                            JOptionPane.showMessageDialog(this, "Erro ao restaurar backup: " + ex.getMessage(), "Erro", JOptionPane.ERROR_MESSAGE);
+                        });
+                    }
+                }).start();
+            }
+        }
+    }
+    
+    private void logMessage(String message) {
+        SwingUtilities.invokeLater(() -> {
+            logArea.append(message + "\n");
+            logArea.setCaretPosition(logArea.getDocument().getLength());
+        });
+    }
+}
+
+PessoaDAO:
+
+package org.example;
+
+import java.sql.*;
+import java.util.ArrayList;
+import java.util.List;
+
+public class PessoaDAO {
+    
+    public void salvar(String nome, int idade) throws SQLException {
+        String sql = "INSERT INTO Pessoa (Nome, Idade) VALUES (?, ?)";
+        
+        try (Connection conn = ConnectionFactory.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            
+            pstmt.setString(1, nome);
+            pstmt.setInt(2, idade);
+            pstmt.executeUpdate();
+        }
+    }
+    
+    public List<String> buscar(String termo) {
+        List<String> resultados = new ArrayList<>();
+        String sql = "SELECT Nome, Idade FROM Pessoa WHERE Nome LIKE ? OR Idade = ?";
+        
+        try (Connection conn = ConnectionFactory.getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            
+            pstmt.setString(1, "%" + termo + "%");
+            
+            try {
+                pstmt.setInt(2, Integer.parseInt(termo));
+            } catch (NumberFormatException e) {
+                pstmt.setNull(2, Types.INTEGER);
+            }
+            
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    resultados.add(String.format("Nome: %s, Idade: %d", 
+                        rs.getString("Nome"), rs.getInt("Idade")));
+                }
+            }
+            
+        } catch (SQLException e) {
+            System.err.println("Erro ao buscar dados: " + e.getMessage());
+        }
+        
+        return resultados;
+    }
+}
+
+SetupDialog:
+
+package org.example;
+
+import javax.swing.*;
+import java.awt.*;
+import java.awt.event.ActionEvent;
+import java.io.File;
+import java.util.List;
+
+public class SetupDialog extends JDialog {
+    private JTextField serverField;
+    private JButton detectButton, testButton, okButton, cancelButton, installButton, gerenciarDbButton;
+    private JTextArea logArea;
+    private boolean configured = false;
+    
+    public SetupDialog() {
+        super((Frame) null, "Configuração do Banco de Dados - Detecção Inteligente", true);
+        initializeUI();
+    }
+
+    SetupDialog(AppGUI aThis) {
+        throw new UnsupportedOperationException("Not supported yet."); // Generated from nbfs://nbhost/SystemFileSystem/Templates/Classes/Code/GeneratedMethodBody
+    }
+    
+    private void initializeUI() {
+        setLayout(new BorderLayout(10, 10));
+        setSize(600, 400);
+        setLocationRelativeTo(null);
+        setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
+        
+        JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
+        mainPanel.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
+        
+        // Painel de entrada
+        JPanel inputPanel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        
+        gbc.gridx = 0; gbc.gridy = 0;
+        inputPanel.add(new JLabel("Servidor SQL:"), gbc);
+        
+        gbc.gridx = 1; gbc.gridy = 0; gbc.weightx = 1.0;
+        serverField = new JTextField(ConfigManager.getServerName(), 25);
+        inputPanel.add(serverField, gbc);
+        
+        gbc.gridx = 2; gbc.gridy = 0; gbc.weightx = 0;
+        detectButton = new JButton("🔍 Detectar Automaticamente");
+        detectButton.addActionListener(this::detectServers);
+        inputPanel.add(detectButton, gbc);
+        
+        // Área de log
+        logArea = new JTextArea(8, 50);
+        logArea.setEditable(false);
+        logArea.setBackground(new Color(240, 240, 240));
+        logArea.setFont(new Font("Consolas", Font.PLAIN, 11));
+        JScrollPane logScroll = new JScrollPane(logArea);
+        
+        // Painel de botões de ação
+        JPanel actionPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        installButton = new JButton("📋 Instalar SQL Server Express");
+        installButton.addActionListener(this::showInstallationHelp);
+        actionPanel.add(installButton);
+        
+        gerenciarDbButton = new JButton("🗃️ Gerenciar Banco de Dados");
+        gerenciarDbButton.addActionListener(e -> {
+            dispose();
+            new InstallerGUI().setVisible(true);
+        });
+        actionPanel.add(gerenciarDbButton);
+        
+        // Painel de controle
+        JPanel controlPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        testButton = new JButton("🧪 Testar Conexão");
+        testButton.addActionListener(this::testConnection);
+        controlPanel.add(testButton);
+        
+        okButton = new JButton("✅ Salvar e Conectar");
+        okButton.addActionListener(this::saveConfiguration);
+        controlPanel.add(okButton);
+        
+        cancelButton = new JButton("❌ Cancelar");
+        cancelButton.addActionListener(e -> dispose());
+        controlPanel.add(cancelButton);
+        
+        // Montagem do layout
+        mainPanel.add(inputPanel, BorderLayout.NORTH);
+        mainPanel.add(logScroll, BorderLayout.CENTER);
+        mainPanel.add(actionPanel, BorderLayout.SOUTH);
+        
+        add(mainPanel, BorderLayout.CENTER);
+        add(controlPanel, BorderLayout.SOUTH);
+        
+        getRootPane().setDefaultButton(okButton);
+        
+        // Detecção automática ao abrir
+        SwingUtilities.invokeLater(this::autoDetectOnStart);
+    }
+    
+    private void autoDetectOnStart() {
+        logMessage("🚀 Iniciando detecção automática de instâncias SQL Server...");
+        detectServers(null);
+    }
+    
+    private void logMessage(String message) {
+        SwingUtilities.invokeLater(() -> {
+            logArea.append(message + "\n");
+            logArea.setCaretPosition(logArea.getDocument().getLength());
+        });
+    }
+    
+    private void detectServers(ActionEvent e) {
+        logMessage("\n=== INICIANDO DETECÇÃO DE INSTÂNCIAS ===");
+        
+        new Thread(() -> {
+            try {
+                List<String> instances = DatabaseManager.getInstance().detectAllPossibleInstances();
+                
+                SwingUtilities.invokeLater(() -> {
+                    if (!instances.isEmpty()) {
+                        logMessage("✅ " + instances.size() + " instância(s) detectada(s)!");
+                        
+                        String[] serverArray = instances.toArray(new String[0]);
+                        String selected = (String) JOptionPane.showInputDialog(
+                            this, 
+                            "Instâncias SQL Server detectadas:\n\n" +
+                            "💡 Dica: Use 'localhost\\\\SQLEXPRESS03' ou '.\\\\SQLEXPRESS03'",
+                            "Detecção Automática",
+                            JOptionPane.QUESTION_MESSAGE, 
+                            null, 
+                            serverArray, 
+                            serverArray[0]
+                        );
+                        
+                        if (selected != null) {
+                            serverField.setText(selected);
+                            logMessage("📋 Instância selecionada: " + selected);
+                            testConnection(null);
+                        }
+                    } else {
+                        logMessage("❌ Nenhuma instância conectável encontrada.");
+                        suggestSolutions();
+                    }
+                });
+                
+            } catch (Exception ex) {
+                SwingUtilities.invokeLater(() -> {
+                    logMessage("❌ Erro durante detecção: " + ex.getMessage());
+                });
+            }
+        }).start();
+    }
+    
+    private void suggestSolutions() {
+        int option = JOptionPane.showConfirmDialog(this,
+            "Nenhuma instância SQL Server foi detectada.\n\n" +
+            "Possíveis soluções:\n" +
+            "• Verifique se o SQL Server está rodando\n" +
+            "• Habilite TCP/IP no SQL Server Configuration Manager\n\n" +
+            "Deseja ver instruções detalhadas?",
+            "Configuração Necessária", 
+            JOptionPane.YES_NO_OPTION);
+            
+        if (option == JOptionPane.YES_OPTION) {
+            showDetailedInstallationHelp();
+        }
+    }
+    
+    private void showDetailedInstallationHelp() {
+        String message = 
+            "🔧 SOLUÇÕES PARA PROBLEMAS DE CONEXÃO:\n\n" +
+            "1. VERIFICAR SERVIÇO SQL SERVER:\n" +
+            "   - Abra 'Services.msc'\n" +
+            "   - Procure por 'SQL Server (SQLEXPRESS03)'\n" +
+            "   - Se parado, clique com botão direito e selecione 'Iniciar'\n\n" +
+            "2. HABILITAR TCP/IP:\n" +
+            "   - Abra 'SQL Server Configuration Manager'\n" +
+            "   - Vá em 'SQL Server Network Configuration' > 'Protocols for SQLEXPRESS03'\n" +
+            "   - Clique com botão direito em 'TCP/IP' e selecione 'Enable'\n" +
+            "   - Reinicie o serviço SQL Server\n\n" +
+            "3. INSTALAÇÃO SQL SERVER EXPRESS:\n" +
+            "   - Download: https://www.microsoft.com/en-us/sql-server/sql-server-downloads\n" +
+            "   - Escolha 'Basic' durante a instalação";
+            
+        JTextArea textArea = new JTextArea(message, 15, 60);
+        textArea.setEditable(false);
+        textArea.setCaretPosition(0);
+        textArea.setFont(new Font("Consolas", Font.PLAIN, 11));
+        
+        JScrollPane scrollPane = new JScrollPane(textArea);
+        JOptionPane.showMessageDialog(this, scrollPane, 
+            "Soluções para Conexão SQL Server", JOptionPane.INFORMATION_MESSAGE);
+    }
+    
+    private void showInstallationHelp(ActionEvent e) {
+        String message = 
+            "📋 INSTRUÇÕES PARA INSTALAR SQL SERVER EXPRESS:\n\n" +
+            "1. Baixe o SQL Server Express gratuitamente:\n" +
+            "   https://www.microsoft.com/en-us/sql-server/sql-server-downloads\n\n" +
+            "2. Durante a instalação:\n" +
+            "   - Tipo de instalação: Básica\n" +
+            "   - Aceite a licença\n" +
+            "   - Instale com configurações padrão";
+            
+        JTextArea textArea = new JTextArea(message, 10, 50);
+        textArea.setEditable(false);
+        textArea.setCaretPosition(0);
+        
+        JScrollPane scrollPane = new JScrollPane(textArea);
+        JOptionPane.showMessageDialog(this, scrollPane, 
+            "Instalação do SQL Server Express", JOptionPane.INFORMATION_MESSAGE);
+    }
+    
+    private void testConnection(ActionEvent e) {
+        String serverName = serverField.getText().trim();
+        
+        if (serverName.isEmpty()) {
+            showError("Digite o nome do servidor SQL Server.");
+            return;
+        }
+        
+        logMessage("\n=== TESTANDO CONEXÃO ===");
+        logMessage("Servidor: " + serverName);
+        
+        new Thread(() -> {
+            try {
+                boolean connected = ConnectionFactory.testConnection(serverName);
+                
+                SwingUtilities.invokeLater(() -> {
+                    if (connected) {
+                        logMessage("✅ CONEXÃO BEM-SUCEDIDA!");
+                        JOptionPane.showMessageDialog(this,
+                            "✅ Conexão estabelecida com sucesso!\n" +
+                            "Servidor: " + serverName,
+                            "Teste de Conexão", JOptionPane.INFORMATION_MESSAGE);
+                    } else {
+                        logMessage("❌ FALHA NA CONEXÃO");
+                        showError("Não foi possível conectar ao servidor.\n" +
+                                 "Verifique se o SQL Server está rodando.");
+                    }
+                });
+                
+            } catch (Exception ex) {
+                SwingUtilities.invokeLater(() -> {
+                    logMessage("❌ Erro no teste: " + ex.getMessage());
+                    showError("Erro ao testar conexão: " + ex.getMessage());
+                });
+            }
+        }).start();
+    }
+    
+    private void saveConfiguration(ActionEvent e) {
+        String serverName = serverField.getText().trim();
+        
+        if (serverName.isEmpty()) {
+            showError("O nome do servidor é obrigatório.");
+            return;
+        }
+        
+        logMessage("\n=== SALVANDO CONFIGURAÇÃO ===");
+        
+        new Thread(() -> {
+            try {
+                // Testa APENAS a conexão com o servidor (NÃO com o banco)
+                logMessage("🔌 Testando conexão com servidor...");
+                boolean serverConnected = ConnectionFactory.testConnection(serverName);
+                
+                if (!serverConnected) {
+                    SwingUtilities.invokeLater(() -> {
+                        showError("Não foi possível conectar ao servidor.\nTeste a conexão antes de salvar.");
+                    });
+                    return;
+                }
+                
+                logMessage("✅ Conexão com servidor bem-sucedida!");
+                
+                // Salva a configuração do servidor
+                ConfigManager.setServerName(serverName);
+                logMessage("💾 Configuração salva: " + serverName);
+                
+                // PERGUNTA AO USUÁRIO O QUE DESEJA FAZER
+                SwingUtilities.invokeLater(() -> {
+                    Object[] options = {
+                        "🗃️ Criar Novo Banco de Dados", 
+                        "💾 Restaurar de Backup", 
+                        "🚪 Só Salvar Configuração"
+                    };
+                    
+                    int choice = JOptionPane.showOptionDialog(this,
+                        "Configuração do servidor salva com sucesso!\n\n" +
+                        "O que deseja fazer agora?\n" +
+                        "• 🗃️ Criar Novo Banco: Cria banco e tabela do zero\n" +
+                        "• 💾 Restaurar Backup: Restaura de arquivo .bak\n" +
+                        "• 🚪 Só Salvar: Apenas salva a configuração",
+                        "Escolha uma Ação",
+                        JOptionPane.DEFAULT_OPTION,
+                        JOptionPane.QUESTION_MESSAGE,
+                        null,
+                        options,
+                        options[0]);
+                    
+                    switch (choice) {
+                        case 0: // Criar Banco
+                            createDatabase(serverName);
+                            break;
+                        case 1: // Restaurar Backup
+                            restoreBackup(serverName);
+                            break;
+                        case 2: // Só Salvar
+                            finishConfiguration();
+                            break;
+                        default:
+                            finishConfiguration();
+                    }
+                });
+                
+            } catch (Exception ex) {
+                SwingUtilities.invokeLater(() -> {
+                    logMessage("❌ Erro: " + ex.getMessage());
+                    showError("Erro na configuração: " + ex.getMessage());
+                });
+            }
+        }).start();
+    }
+    
+    private void restoreBackup(String serverName) {
+        JFileChooser fileChooser = new JFileChooser();
+        fileChooser.setDialogTitle("Selecionar Arquivo de Backup (.bak)");
+        fileChooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Backup SQL Server", "bak"));
+        
+        int result = fileChooser.showOpenDialog(this);
+        if (result == JFileChooser.APPROVE_OPTION) {
+            File backupFile = fileChooser.getSelectedFile();
+            
+            new Thread(() -> {
+                try {
+                    logMessage("💾 Iniciando restauração do backup...");
+                    logMessage("Arquivo: " + backupFile.getAbsolutePath());
+                    
+                    DatabaseInitializer initializer = new DatabaseInitializer();
+                    boolean success = initializer.restoreDatabase(backupFile.getAbsolutePath());
+                    
+                    SwingUtilities.invokeLater(() -> {
+                        if (success) {
+                            logMessage("✅ Backup restaurado com sucesso!");
+                            finishConfiguration();
+                        } else {
+                            logMessage("❌ Falha ao restaurar backup");
+                            showError("Falha ao restaurar backup. Tente novamente.");
+                        }
+                    });
+                    
+                } catch (Exception ex) {
+                    SwingUtilities.invokeLater(() -> {
+                        logMessage("❌ Erro na restauração: " + ex.getMessage());
+                        showError("Erro ao restaurar backup: " + ex.getMessage());
+                    });
+                }
+            }).start();
+        }
+    }
+    
+    private void createDatabase(String serverName) {
+        new Thread(() -> {
+            try {
+                logMessage("🗃️ Criando banco de dados...");
+                
+                boolean success = ConnectionFactory.createDatabaseIfNotExists(serverName);
+                
+                SwingUtilities.invokeLater(() -> {
+                    if (success) {
+                        logMessage("✅ Banco criado com sucesso!");
+                        finishConfiguration();
+                    } else {
+                        showError("Falha ao criar banco de dados.");
+                    }
+                });
+                
+            } catch (Exception ex) {
+                SwingUtilities.invokeLater(() -> {
+                    logMessage("❌ Erro na criação: " + ex.getMessage());
+                    showError("Erro ao criar banco: " + ex.getMessage());
+                });
+            }
+        }).start();
+    }
+    
+    private void finishConfiguration() {
+        configured = true;
+        logMessage("🎉 Configuração concluída com sucesso!");
+        SwingUtilities.invokeLater(() -> dispose());
+    }
+    
+    private void showError(String message) {
+        JOptionPane.showMessageDialog(this, message, "Erro", JOptionPane.ERROR_MESSAGE);
+    }
+    
+    public boolean showDialog() {
+        setVisible(true);
+        return configured;
+    }
+}
+
+
